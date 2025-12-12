@@ -5,41 +5,33 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
+import multiprocessing
 
+# 确保能导入项目根目录下的模块
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from metai.dataset import ScwdsDataset
 
+# --- 全局变量，用于子进程 ---
+worker_ds = None 
+global_output_dir = None
+global_target_size = None
+
 def resize_tensor(data_np: np.ndarray, target_shape: tuple, mode: str = 'max_pool') -> np.ndarray:
-    """
-    参考 _interpolate_batch_gpu 实现的独立插值函数。
-    将 Numpy (T, C, H, W) -> Torch (1, T, C, H, W) -> Resize -> Numpy (T, C, H', W')
-    """
+    """独立的插值函数 (逻辑保持不变)"""
     if data_np is None:
         return None
-        
-    # 1. 转换为 Tensor 并增加 Batch 维度 (T, C, H, W) -> (1, T, C, H, W)
     tensor = torch.from_numpy(data_np).unsqueeze(0)
-    
-    # 2. 获取维度信息
     B, T, C, H, W = tensor.shape
     target_H, target_W = target_shape
-    
-    # 如果尺寸一致，直接返回原数据
     if H == target_H and W == target_W:
         return data_np
-
-    # 3. 处理布尔类型 (Mask)
     is_bool = tensor.dtype == torch.bool
     if is_bool:
         tensor = tensor.float()
-    
-    # 4. 合并 B 和 T 维度 (B*T, C, H, W)
     tensor = tensor.view(B * T, C, H, W)
     
-    # 5. 执行插值
     if mode == 'max_pool':
-        # 下采样使用 adaptive_max_pool2d 保留极值
         if target_H < H or target_W < W:
             processed = F.adaptive_max_pool2d(tensor, output_size=target_shape)
         else:
@@ -50,78 +42,119 @@ def resize_tensor(data_np: np.ndarray, target_shape: tuple, mode: str = 'max_poo
     else:
         raise ValueError(f"Unsupported interpolation mode: {mode}")
     
-    # 6. 还原维度 (1, T, C, H', W') -> (T, C, H', W')
     processed = processed.view(B, T, C, target_H, target_W)
     if is_bool:
         processed = processed.bool()
-        
     return processed.squeeze(0).numpy()
 
-def export_train_data_to_npz(data_path, output_dir, target_size=(256, 256)):
+def worker_init(data_path, output_dir, target_size):
     """
-    遍历 ScwdsDataset (训练模式)，下采样并保存为 .npz 文件。
+    子进程初始化函数。
+    每个子进程只执行一次：初始化 Dataset，设置全局变量。
     """
+    global worker_ds, global_output_dir, global_target_size
     
+    # 限制 Torch 在子进程中只用单核，避免与多进程冲突导致效率下降
+    torch.set_num_threads(1)
+    
+    # 初始化 Dataset
+    # 注意：这里假设 ScwdsDataset 读取 JSONL 很快。
+    # 如果 JSONL 巨大，可以考虑只传索引，主进程读 JSONL (稍微复杂点)，
+    # 但通常这里直接 init 是最简单的方案。
+    try:
+        worker_ds = ScwdsDataset(data_path=data_path, is_train=True)
+    except Exception as e:
+        print(f"[Worker Error] Dataset init failed: {e}")
+        worker_ds = None
+
+    global_output_dir = output_dir
+    global_target_size = target_size
+
+def process_sample(idx):
+    """
+    单个样本的处理逻辑。
+    由子进程调用。
+    """
+    global worker_ds, global_output_dir, global_target_size
+    
+    if worker_ds is None:
+        return False, f"Dataset not initialized in worker"
+
+    try:
+        batch = worker_ds[idx]
+        metadata, input_data, target_data, input_mask, target_mask = batch
+        
+        # --- Resize ---
+        input_data_resized = resize_tensor(input_data, global_target_size, mode='max_pool')
+        target_data_resized = resize_tensor(target_data, global_target_size, mode='max_pool')
+        target_mask_resized = resize_tensor(target_mask, global_target_size, mode='nearest')
+        
+        # --- Save ---
+        sample_id = metadata.get('sample_id', f'sample_{idx}')
+        save_path = os.path.join(global_output_dir, f"{sample_id}.npz")
+        
+        save_dict = {
+            "input_data": input_data_resized,
+            "target_data": target_data_resized,
+            "target_mask": target_mask_resized
+        }
+        
+        # np.savez_compressed(save_path, **save_dict)
+        np.savez(save_path, **save_dict)
+        return True, None
+        
+    except Exception as e:
+        sid = 'Unknown'
+        if 'metadata' in locals():
+            sid = metadata.get('sample_id', 'Unknown')
+        return False, f"Sample {idx} (ID: {sid}) failed: {e}"
+
+def export_train_data_parallel(data_path, output_dir, target_size=(256, 256), num_workers=8):
     # 1. 创建输出目录
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         print(f"[INFO] 创建输出目录: {output_dir}")
 
-    # 2. 初始化数据集 (强制为训练模式)
-    print(f"[INFO] 正在初始化数据集 (Mode: Train)...")
-    try:
-        ds = ScwdsDataset(
-            data_path=data_path, 
-            is_train=True 
-        )
-    except Exception as e:
-        print(f"[ERROR] 数据集初始化失败: {e}")
-        return
+    # 2. 预先读取一次 Dataset 长度 (为了 tqdm 和 range)
+    # 只需要轻量级初始化一次，或者手动解析 jsonl 行数
+    print("[INFO] 正在计算样本总数...")
+    temp_ds = ScwdsDataset(data_path=data_path, is_train=True)
+    total_samples = len(temp_ds)
+    del temp_ds # 释放
+    print(f"[INFO] 样本总数: {total_samples}")
+    print(f"[INFO] 启动并行处理 (Workers: {num_workers})...")
 
-    print(f"[INFO] 共发现 {len(ds)} 个样本，准备导出并Resize到 {target_size}...")
+    # 3. 配置多进程 Pool
+    # 这里的 initializer 会确保每个 worker 都有自己的 dataset 实例
+    pool = multiprocessing.Pool(
+        processes=num_workers,
+        initializer=worker_init,
+        initargs=(data_path, output_dir, target_size)
+    )
 
-    # 3. 遍历并保存
+    # 4. 并行执行
     success_count = 0
     fail_count = 0
+    
+    # 使用 imap_unordered 可以让结果无序返回（处理完一个返回一个），让进度条更丝滑
+    # chunksize 可以适当调大，减少进程间通信频率
+    results = list(tqdm(
+        pool.imap_unordered(process_sample, range(total_samples), chunksize=10),
+        total=total_samples,
+        desc="Exporting"
+    ))
 
-    # NOTE: torch Dataset 不保证实现 Iterable；为兼容类型检查与所有 Dataset 实现，这里用索引遍历。
-    for i in tqdm(range(len(ds)), desc="Exporting & Resizing"):
-        batch = ds[i]
-        metadata = {}
-        try:
-            # 解包 (匹配 to_numpy 修改后的顺序)
-            metadata, input_data, target_data, input_mask, target_mask = batch
-            
-            # input_data: (T, C, H, W) -> max_pool -> (T, C, 256, 256)
-            input_data_resized = resize_tensor(input_data, target_size, mode='max_pool')
-            
-            # target_data: (T, 1, H, W) -> max_pool -> (T, 1, 256, 256)
-            target_data_resized = resize_tensor(target_data, target_size, mode='max_pool')
-            
-            # target_mask: (T, 1, H, W) -> nearest -> (T, 1, 256, 256)
-            target_mask_resized = resize_tensor(target_mask, target_size, mode='nearest')
-            
-            # -----------------------------
+    # 5. 关闭 Pool
+    pool.close()
+    pool.join()
 
-            # 获取样本ID作为文件名
-            sample_id = metadata.get('sample_id', f'sample_{i}')
-            save_path = os.path.join(output_dir, f"{sample_id}.npz")
-            
-            # 仅保存指定的三个字段
-            save_dict = {
-                "input_data": input_data_resized,
-                "target_data": target_data_resized,
-                "target_mask": target_mask_resized
-            }
-            
-            # 保存为压缩文件
-            np.savez_compressed(save_path, **save_dict)
+    # 6. 统计结果
+    for success, msg in results:
+        if success:
             success_count += 1
-            
-        except Exception as e:
-            sid = metadata.get('sample_id', 'Unknown') if isinstance(metadata, dict) else 'Unknown'
-            print(f"\n[WARNING] 样本 {i} (ID: {sid}) 处理失败: {e}")
+        else:
             fail_count += 1
+            if msg: print(f"\n[WARNING] {msg}")
 
     print(f"\n[DONE] 处理结束。")
     print(f"成功: {success_count}")
@@ -129,17 +162,22 @@ def export_train_data_to_npz(data_path, output_dir, target_size=(256, 256)):
     print(f"文件保存在: {output_dir}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="将 ScwdsDataset 导出为 .npz (Resize to 256x256)")
+    parser = argparse.ArgumentParser(description="并行导出 ScwdsDataset 为 .npz")
     
     parser.add_argument("--data_path", type=str, default="data/samples.jsonl", 
                         help="样本索引文件路径")
     parser.add_argument("--output_dir", type=str, default="/data/zjobs/SevereWeather_AI_2025/CP/Train", 
                         help="结果保存目录")
+    # 默认 worker 数量设为 CPU 核心数，可根据实际情况调整
+    parser.add_argument("--num_workers", type=int, default=50, 
+                        help="并行进程数")
 
     args = parser.parse_args()
     
-    export_train_data_to_npz(
+    # Windows 下 multiprocessing 必须在 if __name__ == '__main__': 保护下运行
+    export_train_data_parallel(
         data_path=args.data_path,
         output_dir=args.output_dir,
-        target_size=(256, 256)
+        target_size=(256, 256),
+        num_workers=args.num_workers
     )

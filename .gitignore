@@ -183,4 +183,6 @@ bak/
 submit/
 test_logs/
 
+data/
+
 *.zip

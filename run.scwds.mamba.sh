@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# SimVP SCWDS 全流程脚本 (Optimized for 4x A800 80GB)
-# 包含: Train (SimVP) -> Test (SimVP) -> Infer (SimVP) -> [NEW] Probabilistic Model
+# Nowcasting 全流程脚本
+# 包含: Train -> Test -> Infer  ->
 # Usage: bash run.scwds.simvp.sh [MODE]
 
 # ================= 环境变量优化 =================
@@ -14,11 +14,11 @@ export NCCL_DEBUG=WARN
 # ================= 参数检查 =================
 if [ $# -eq 0 ]; then
     echo "错误: 请指定操作模式"
-    echo "用法: bash run.scwds.simvp.sh [MODE]"
+    echo "用法: bash run.scwds.mamba.sh [MODE]"
     echo "支持的模式:"
-    echo " train      - 训练 SimVP 基座模型"
-    echo " test       - 测试 SimVP 基座模型"
-    echo " infer      - 使用 SimVP 基座进行推理"
+    echo " train      - 训练 Mamba 基座模型"
+    echo " test       - 测试 Mamba 基座模型"
+    echo " infer      - 使用 Mamba 基座进行推理"
     echo " infer_gpm  - 使用 Soft-GPM 后处理推理"
     exit 1
 fi
@@ -34,48 +34,48 @@ case $MODE in
         echo "🚀 开始训练 Mamba 基座模型 (BF16 Mixed)..."
         echo "--------------------------------------------------------"
         
-        python run/train_scwds_simvp.py \
-            --data_path data/samples.jsonl \
-            --save_dir ./output/simvp \
-            --batch_size 3 \
-            --accumulate_grad_batches 4 \
-            --num_workers 8 \
-            \
-            --in_shape 10 54 256 256 \
-            --aft_seq_length 20 \
-            --max_epochs 100 \
-            --opt adamw \
-            --lr 5e-4 \
-            --sched cosine \
-            --min_lr 1e-6 \
-            --warmup_epoch 5 \
-            \
-            --model_type mamba \
-            --hid_S 128 \
-            --hid_T 1024 \
-            --N_S 4 \
-            --N_T 16 \
-            --mlp_ratio 4.0 \
-            --drop 0.05 \
-            --drop_path 0.3 \
-            --spatio_kernel_enc 7 \
-            --spatio_kernel_dec 7 \
-            --loss_weight_l1 1.0 \
-            --loss_weight_csi 1.0 \
-            --loss_weight_ssim 0.5 \
-            --loss_weight_evo 0.5 \
-            --loss_weight_spectral 0.1 \
-            \
-            --use_curriculum_learning false \
-            --early_stop_patience 15 \
-            --early_stop_monitor val_score \
-            --early_stop_mode max \
-            --accelerator cuda \
-            --devices 1,2,3 \
-            --precision bf16-mixed \
-            --gradient_clip_val 0.5 \
-            --gradient_clip_algorithm norm \
-            --ckpt_path ./output/simvp/epoch=13-val_score=0.1147.ckpt
+        python run/train_scwds_mamba.py fit \
+        --seed_everything 42 \
+        \
+        --trainer.default_root_dir "./output/mamba" \
+        --trainer.accelerator cuda \
+        --trainer.devices 1,2,3 \
+        --trainer.strategy ddp_find_unused_parameters_true \
+        --trainer.precision 16-mixed \
+        --trainer.max_epochs 100 \
+        --trainer.log_every_n_steps 1000 \
+        --trainer.accumulate_grad_batches 1 \
+        \
+        --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
+        --trainer.callbacks.monitor "val_score" \
+        --trainer.callbacks.mode "max" \
+        --trainer.callbacks.save_top_k -1 \
+        --trainer.callbacks.save_last true \
+        --trainer.callbacks.filename "epoch={epoch:02d}-score={val_score:.4f}" \
+        \
+        --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping \
+        --trainer.callbacks.monitor "val_score" \
+        --trainer.callbacks.mode "max" \
+        --trainer.callbacks.patience 20 \
+        \
+        --data.data_path "data/samples.jsonl" \
+        --data.batch_size 4 \
+        --data.num_workers 8 \
+        \
+        --model.in_shape "[10, 54, 256, 256]" \
+        --model.out_seq_length 20 \
+        --model.hid_S 64 \
+        --model.hid_T 256 \
+        --model.N_S 4 \
+        --model.N_T 16 \
+        --model.mlp_ratio 4.0 \
+        --model.drop 0.05 \
+        --model.drop_path 0.1 \
+        --model.d_state 16 \
+        --model.d_conv 4 \
+        --model.expand 2 \
+        --model.lr 5e-5 \
+        --model.use_curriculum_learning false
         ;;
         
     # ============================================================

@@ -27,7 +27,7 @@ MODE=$1
 
 case $MODE in
     # ============================================================
-    # 1. 训练 SimVP 基座 (Stage 1)
+    # 1. 训练 Mamba 基座 (Stage 1)
     # ============================================================
     "train")
         echo "--------------------------------------------------------"
@@ -45,6 +45,8 @@ case $MODE in
         --trainer.max_epochs 100 \
         --trainer.log_every_n_steps 1000 \
         --trainer.accumulate_grad_batches 1 \
+        --trainer.gradient_clip_val 0.5 \
+        --trainer.gradient_clip_algorithm "norm" \
         \
         --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
         --trainer.callbacks.monitor "val_score" \
@@ -64,14 +66,16 @@ case $MODE in
         \
         --model.in_shape "[10, 54, 256, 256]" \
         --model.out_seq_length 20 \
-        --model.hid_S 64 \
-        --model.hid_T 256 \
+        --model.hid_S 256 \
+        --model.hid_T 1024 \
         --model.N_S 4 \
         --model.N_T 16 \
         --model.mlp_ratio 4.0 \
+        --model.spatio_kernel_enc 7 \
+        --model.spatio_kernel_dec 7 \
         --model.drop 0.05 \
         --model.drop_path 0.1 \
-        --model.d_state 16 \
+        --model.d_state 32 \
         --model.d_conv 4 \
         --model.expand 2 \
         --model.lr 5e-5 \
@@ -79,7 +83,7 @@ case $MODE in
         ;;
         
     # ============================================================
-    # 2. 测试 SimVP 基座
+    # 2. 测试 Mamba 基座
     # ============================================================
     "test")
         echo "----------------------------------------"
@@ -96,7 +100,7 @@ case $MODE in
         ;;
         
     # ============================================================
-    # 3. 推理 SimVP 基座
+    # 3. 推理 Mamba 基座
     # ============================================================
     "infer")
         echo "----------------------------------------"
@@ -111,11 +115,11 @@ case $MODE in
         ;;
 
     # ============================================================
-    # 4. 推理 SimVP 基座 + Soft-GPM 后处理
+    # 4. 推理 Mamba 基座 + Soft-GPM 后处理
     # ============================================================
     "infer_gpm")
         echo "----------------------------------------"
-        echo "🔮 开始推理 SimVP (Soft-GPM) 模型..."
+        echo "🔮 开始推理 Mamba (Soft-GPM) 模型..."
         echo "----------------------------------------"
         
         python run/infer_scwds_simvp_gpm.py \

@@ -87,7 +87,7 @@ class MambaMidNet(nn.Module):
         # Mamba 堆叠层
         dpr = [x.item() for x in torch.linspace(0, drop_path, N2)]
         self.layers = nn.Sequential(*[
-            MambaSubBlock(dim=channel_hid, mlp_ratio=mlp_ratio, drop=drop, drop_path=dpr[i],d_state=d_state, d_conv=d_conv, expand=expand)
+            MambaSubBlock(dim=channel_hid, mlp_ratio=mlp_ratio, drop=drop, drop_path=dpr[i], d_state=d_state, d_conv=d_conv, expand=expand)
             for i in range(N2)
         ])
     
@@ -105,7 +105,7 @@ class MetMamba(nn.Module):
                  mlp_ratio=4., drop=0.0, drop_path=0.0, 
                  spatio_kernel_enc=3, spatio_kernel_dec=3, 
                  out_channels=None, out_seq_length=None, 
-                 d_state=16, d_conv=4, expand=2,**kwargs):
+                 d_state=16, d_conv=4, expand=2, **kwargs):
         super().__init__()
         T, C, H, W = in_shape
         self.T_out = out_seq_length if out_seq_length is not None else T

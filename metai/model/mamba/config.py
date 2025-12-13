@@ -103,17 +103,17 @@ class ModelConfig(BaseModel):
 
     d_state: int = Field(
         default=16, 
-        description="SSM 状态维度"
+        description="SSM 状态维度 (State Dimension)"
     )
 
     d_conv: int = Field(
         default=4, 
-        description="SSM 局部卷积核大小"
+        description="SSM 局部卷积核大小 (Local Conv Kernel Size)"
     )
-
+    
     expand: int = Field(
         default=2, 
-        description="SSM 扩展倍数"
+        description="SSM 扩展倍数 (Expansion Factor)"
     )
 
     # =========================================================================

@@ -101,6 +101,21 @@ class ModelConfig(BaseModel):
         description="Drop Path (Stochastic Depth) 比率"
     )
 
+    d_state: int = Field(
+        default=16, 
+        description="SSM 状态维度"
+    )
+
+    d_conv: int = Field(
+        default=4, 
+        description="SSM 局部卷积核大小"
+    )
+
+    expand: int = Field(
+        default=2, 
+        description="SSM 扩展倍数"
+    )
+
     # =========================================================================
     # 5. 训练与优化配置 (Training & Optimization)
     # =========================================================================

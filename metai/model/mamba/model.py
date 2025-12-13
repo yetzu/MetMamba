@@ -79,7 +79,7 @@ class Decoder(nn.Module):
 
 class MambaMidNet(nn.Module):
     """纯粹的 Mamba 中间特征提取网络"""
-    def __init__(self, channel_in, channel_hid, N2, mlp_ratio=4., drop=0., drop_path=0.):
+    def __init__(self, channel_in, channel_hid, N2, mlp_ratio=4., drop=0., drop_path=0., d_state=16, d_conv=4, expand=2):
         super().__init__()
         # 通道投影: T*hid_S -> hid_T
         self.proj_in = nn.Conv2d(channel_in, channel_hid, 1, 1, 0) if channel_in != channel_hid else nn.Identity()
@@ -87,7 +87,7 @@ class MambaMidNet(nn.Module):
         # Mamba 堆叠层
         dpr = [x.item() for x in torch.linspace(0, drop_path, N2)]
         self.layers = nn.Sequential(*[
-            MambaSubBlock(dim=channel_hid, mlp_ratio=mlp_ratio, drop=drop, drop_path=dpr[i])
+            MambaSubBlock(dim=channel_hid, mlp_ratio=mlp_ratio, drop=drop, drop_path=dpr[i],d_state=d_state, d_conv=d_conv, expand=expand)
             for i in range(N2)
         ])
     
@@ -104,7 +104,8 @@ class MetMamba(nn.Module):
     def __init__(self, in_shape, hid_S=64, hid_T=256, N_S=4, N_T=8, 
                  mlp_ratio=4., drop=0.0, drop_path=0.0, 
                  spatio_kernel_enc=3, spatio_kernel_dec=3, 
-                 out_channels=None, out_seq_length=None, **kwargs):
+                 out_channels=None, out_seq_length=None, 
+                 d_state=16, d_conv=4, expand=2,**kwargs):
         super().__init__()
         T, C, H, W = in_shape
         self.T_out = out_seq_length if out_seq_length is not None else T
@@ -116,7 +117,7 @@ class MetMamba(nn.Module):
         # 2. Temporal Translator (Mamba)
         # 输入维度: T帧 * 空间维度hid_S
         mid_channel_in = T * hid_S
-        self.hid = MambaMidNet(mid_channel_in, hid_T, N_T, mlp_ratio, drop, drop_path)
+        self.hid = MambaMidNet(mid_channel_in, hid_T, N_T, mlp_ratio, drop, drop_path, d_state, d_conv, expand)
         
         # 输出投影: hid_T -> T_out * hid_S
         self.proj_out = nn.Conv2d(hid_T, self.T_out * hid_S, 1, 1, 0)

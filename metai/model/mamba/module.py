@@ -125,7 +125,7 @@ class MambaSubBlock(nn.Module):
         drop_path (float): Stochastic Depth (Drop Path) 比率
         act_layer (nn.Module): 激活函数
     """
-    def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, **kwargs):
+    def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, d_state=16, d_conv=4, expand=2,**kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         
@@ -135,9 +135,9 @@ class MambaSubBlock(nn.Module):
         # expand: 输入投影扩展倍数
         mamba_cfg = dict(
             d_model=dim,
-            d_state=16,
-            d_conv=4,
-            expand=2,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand=expand,
         )
         
         self.mamba_h = Mamba(**mamba_cfg) # 水平方向

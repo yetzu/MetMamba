@@ -48,7 +48,10 @@ class MetMambaTrainer(l.LightningModule):
             spatio_kernel_enc=config.get('spatio_kernel_enc', 3),
             spatio_kernel_dec=config.get('spatio_kernel_dec', 3),
             out_channels=config.get('out_channels', 1),
-            out_seq_length=config.get('out_seq_length', 20)
+            out_seq_length=config.get('out_seq_length', 20),
+            d_state=config.get('d_state', 16),
+            d_conv=config.get('d_conv', 4),
+            expand=config.get('expand', 2),
         )
 
     def configure_optimizers(self) -> OptimizerLRScheduler:

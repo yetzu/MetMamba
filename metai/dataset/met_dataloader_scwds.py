@@ -5,7 +5,6 @@ import numpy as np
 import torch
 from lightning.pytorch import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
-import torch.nn.functional as F 
 from metai.dataset import MetSample
 from metai.utils.met_config import get_config
 
@@ -60,6 +59,7 @@ class ScwdsDataset(Dataset):
 
         if self.is_train:
             npz_path = os.path.join(self.npz_dir, f"{sample_id}.npz")
+
             if os.path.exists(npz_path):
                 try:
                     # 使用 allow_pickle=True 以防万一，尽管我们主要存的是数组

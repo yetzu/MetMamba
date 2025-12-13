@@ -2,7 +2,6 @@ import os
 from dataclasses import dataclass
 from typing import Optional, List
 from datetime import datetime, timedelta
-from metai.utils import MLOGE
 from metai.utils import MetLabel, MetRadar, MetNwp
 from metai.utils.met_config import get_config, MetConfig
 
@@ -83,7 +82,7 @@ class MetCase:
             else:
                 return sorted([file for file in os.listdir(data_dir) if file.endswith('.npy')])  
         except Exception as e:
-            MLOGE(f"加载标签文件失败: {e}")
+            print(f"[ERROR] 加载标签文件失败: {e}")
             return []
     
     def _load_radar_files(self, radar_var: MetRadar = MetRadar.CR, return_full_path=False) -> List[str]:
@@ -108,7 +107,7 @@ class MetCase:
             else:
                 return sorted([file for file in os.listdir(data_dir) if file.endswith('.npy')])
         except Exception as e:
-            MLOGE(f"加载雷达文件失败: {e}")
+            print(f"[ERROR] 加载雷达文件失败: {e}")
             return []
 
     def _load_nwp_files(self, nwp_type: MetNwp = MetNwp.CAPE, return_full_path=False) -> List[str]:
@@ -133,7 +132,7 @@ class MetCase:
             else:
                 return sorted([file for file in os.listdir(data_dir) if file.endswith('.npy')])
         except Exception as e:
-            MLOGE(f"加载数值预报文件失败: {e}")
+            print(f"[ERROR] 加载数值预报文件失败: {e}")
             return []
 
     def _extract_timestamp_from_label_file(self, filename: str) -> Optional[datetime]:
@@ -286,7 +285,7 @@ class MetCase:
             
             return os.path.exists(file_path)
         except Exception as e:
-            MLOGE(f"验证雷达文件失败: {e}")
+            print(f"[ERROR] 验证雷达文件失败: {e}")
             return False
 
     def _validate_radar_completeness(self, label_file: str) -> bool:
@@ -334,7 +333,7 @@ class MetCase:
             
             return os.path.exists(file_path)
         except Exception as e:
-            MLOGE(f"验证数值预报文件失败: {e}")
+            print(f"[ERROR] 验证数值预报文件失败: {e}")
             return False
         
     def _validate_nwp_completeness(self, label_file: str) -> bool:

@@ -72,7 +72,7 @@ def main():
     parser.add_argument('-v', '--version', type=str, default='v1', help='数据版本')
     parser.add_argument('--vars', nargs='+', default=['RA', 'CR', 'CAP30', 'CAP50', 'VIL', 'ET'], help='用于过滤异常帧的变量列表')
     parser.add_argument('--length', type=int, default=30, help='样本时序长度')
-    parser.add_argument('--interval', type=int, default=10, help='滑动窗口步长')
+    parser.add_argument('--interval', type=int, default=30, help='滑动窗口步长')
     
     args = parser.parse_args()
     config = get_config()

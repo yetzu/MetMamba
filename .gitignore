@@ -186,3 +186,5 @@ test_logs/
 data/
 
 *.zip
+
+*.log

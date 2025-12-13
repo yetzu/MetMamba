@@ -39,7 +39,7 @@ case $MODE in
         \
         --trainer.default_root_dir "./output/mamba" \
         --trainer.accelerator cuda \
-        --trainer.devices 1,2,3 \
+        --trainer.devices 0,1,2,3 \
         --trainer.strategy ddp_find_unused_parameters_true \
         --trainer.precision 16-mixed \
         --trainer.max_epochs 100 \
@@ -75,11 +75,28 @@ case $MODE in
         --model.spatio_kernel_dec 7 \
         --model.drop 0.05 \
         --model.drop_path 0.1 \
+        \
         --model.d_state 32 \
         --model.d_conv 4 \
         --model.expand 2 \
+        \
         --model.lr 5e-5 \
-        --model.use_curriculum_learning false
+        --model.opt "adamw" \
+        --model.weight_decay 1e-5 \
+        --model.filter_bias_and_bn true \
+        --model.sched "cosine" \
+        --model.min_lr 1e-6 \
+        --model.warmup_lr 1e-6 \
+        --model.warmup_epoch 5 \
+        --model.decay_epoch 30 \
+        --model.decay_rate 0.1 \
+        --model.use_curriculum_learning false \
+        \
+        --model.loss_weight_l1 1.0 \
+        --model.loss_weight_ssim 0.5 \
+        --model.loss_weight_csi 1.0 \
+        --model.loss_weight_spectral 0.1 \
+        --model.loss_weight_evo 0.5 \
         ;;
         
     # ============================================================

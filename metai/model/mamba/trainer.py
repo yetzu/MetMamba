@@ -31,7 +31,7 @@ class MetMambaTrainer(l.LightningModule):
             evo_weight=config.get('loss_weight_evo', 0.5)
         )
         
-        rs = config.get('resize_shape', None)
+        rs = config.get('resize_shape', (256, 256))
         self.resize_shape = tuple(rs) if rs is not None else None
         self.use_curriculum = config.get('use_curriculum_learning', True)
 

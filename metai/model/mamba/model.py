@@ -81,9 +81,9 @@ class MotionGuidedSkip(nn.Module):
         # channel_in: Skip 特征通道数
         # channel_ref: Decoder 特征通道数
         self.flow_net = nn.Sequential(
-            nn.Conv2d(channel_ref, channel_in, 3, 1, 1),
+            nn.Conv2d(channel_ref + channel_in, channel_in, 3, 1, 1), 
             nn.SiLU(),
-            nn.Conv2d(channel_in, 2, 3, 1, 1) # 输出 (dx, dy)
+            nn.Conv2d(channel_in, 2, 3, 1, 1) 
         )
         # 初始化光流层为0，保证初始状态下不发生偏移
         nn.init.constant_(self.flow_net[-1].weight, 0)
@@ -119,7 +119,7 @@ class MotionGuidedSkip(nn.Module):
         # flow = self.flow_net(dec_feat)
         combined_feat = torch.cat([dec_feat, skip_feat], dim=1) 
         flow = self.flow_net(combined_feat)
-        
+
         warped_skip = self.warp(skip_feat, flow)
         return warped_skip
 

@@ -139,10 +139,10 @@ case $MODE in
         echo "🔮 开始推理 Mamba (Soft-GPM) 模型..."
         echo "----------------------------------------"
         
-        python run/infer_scwds_simvp_gpm.py \
+        python run/infer_scwds_mamba_gpm.py \
             --data_path data/samples.testset.jsonl \
             --in_shape 20 54 256 256 \
-            --save_dir ./output/simvp \
+            --save_dir ./output/mamba \
             --accelerator cuda:0 \
             --gpm_alpha 0.5 \
             --gpm_decay 0.98

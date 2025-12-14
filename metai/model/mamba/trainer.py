@@ -9,6 +9,7 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from metai.model.core import get_optim_scheduler
 from .model import MetMamba
 from .loss import HybridLoss
+from .metrices import MetScore
 
 class MetMambaTrainer(l.LightningModule):
     """
@@ -22,10 +23,10 @@ class MetMambaTrainer(l.LightningModule):
         out_channels: int = 1,
         
         # 2. Model Architecture
-        hid_S: int = 64,
-        hid_T: int = 256,
+        hid_S: int = 128,
+        hid_T: int = 512,
         N_S: int = 4,
-        N_T: int = 8,
+        N_T: int = 12,
         mlp_ratio: float = 4.0,
         spatio_kernel_enc: int = 3,
         spatio_kernel_dec: int = 3,
@@ -75,6 +76,9 @@ class MetMambaTrainer(l.LightningModule):
             evo_weight=self.hparams.loss_weight_evo
         )
         
+        # 3. 初始化验证评分器 (nn.Module 会自动管理 Device)
+        self.val_scorer = MetScore()
+        
         if resize_shape is None and in_shape is not None:
              self.resize_shape = (in_shape[2], in_shape[3])
         else:
@@ -115,15 +119,20 @@ class MetMambaTrainer(l.LightningModule):
             "lr_scheduler": {"scheduler": scheduler, "interval": "epoch" if by_epoch else "step"},
         })
     
-    # =======================================================
-    # 新增：重写 lr_scheduler_step 以支持 Timm 调度器
-    # =======================================================
     def lr_scheduler_step(self, scheduler, optimizer_idx, metric=None):
         """
-        Custom LR Scheduler Step for TIMM Schedulers
-        TIMM 调度器通常需要显式传入 epoch 参数
+        兼容 Timm Scheduler 和 PyTorch Native Scheduler 的 Step 逻辑
         """
-        scheduler.step(epoch=self.current_epoch)
+        if metric is None:
+            # Case 1: 基于 Epoch/Step 的调度器 (Cosine, StepLR 等)
+            try:
+                # 优先尝试 Timm 风格 (必须显式传入 epoch)
+                scheduler.step(epoch=self.current_epoch)
+            except TypeError:
+                scheduler.step()
+        else:
+            # Case 2: 基于指标的调度器 (ReduceLROnPlateau)
+            scheduler.step(metric)
     
     def on_train_epoch_start(self):
         """Curriculum Learning: Dynamic Loss Weights"""
@@ -132,7 +141,6 @@ class MetMambaTrainer(l.LightningModule):
         max_epochs = self.hparams.get('max_epochs', 100)
         progress = self.current_epoch / max_epochs
         
-        # 动态权重策略
         weights = {
             'l1': max(10.0 - (9.0 * (progress ** 0.5)), 1.0),
             'ssim': 1.0 - 0.5 * progress,
@@ -168,11 +176,11 @@ class MetMambaTrainer(l.LightningModule):
 
         x = self._interp(x, 'max_pool')
         y = self._interp(y, 'max_pool')
-        mask = mask.bool()
+        
         mask = self._interp(mask.float(), 'nearest')
 
-        pred = self(x)
-        loss, loss_dict = self.criterion(pred, y, mask=mask)
+        y_pred = self(x)
+        loss, _ = self.criterion(y_pred, y, mask=mask)
         
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
 
@@ -181,69 +189,36 @@ class MetMambaTrainer(l.LightningModule):
     def validation_step(self, batch, batch_idx):
         _, x, y, _, mask = batch
 
+        # 1. 数据对齐与插值
         x = self._interp(x, 'max_pool')
         y = self._interp(y, 'max_pool')
-        mask = mask.bool()
-        mask = self._interp(mask.float(), 'nearest')
         
+        # 2. Mask 处理：确保转为布尔型 (MetScore 内部会再次检查，但传入 float 0/1 也没问题)
+        mask = self._interp(mask.float(), 'nearest')
+        mask_bool = mask > 0.5
+        
+        # 3. 推理
         logits_pred = self(x)
         y_pred = torch.sigmoid(logits_pred)
         y_pred_clamped = torch.clamp(y_pred, 0.0, 1.0)
         
-        loss, _ = self.criterion(logits_pred, y, mask=mask)
-
+        # 4. Loss 计算 (Mask 已经生效)
+        loss, _ = self.criterion(logits_pred, y, mask=mask_bool)
         self.log('val_loss', loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
-        MM_MAX = 30.0
-        pred_mm = y_pred_clamped * MM_MAX
-        target_mm = y * MM_MAX
-
-        thresholds = [0.1, 1.0, 2.0, 5.0, 8.0]
-        level_weights = [0.1, 0.1, 0.2, 0.25, 0.35]
+        # MetScore.forward(pred, target, mask) 
+        # 它会自动处理反归一化、Mask过滤、时效权重和分级权重
+        scores_dict = self.val_scorer(y_pred_clamped, y, mask=mask_bool)
         
-        time_weights_list = [
-            0.0075, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1,
-            0.09, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.0075, 0.005
-        ]
+        self.log('val_score', scores_dict['total_score'], on_epoch=True, prog_bar=True, sync_dist=True)
         
-        T_out = pred_mm.shape[1]
-        if T_out == 20:
-            time_weights = torch.tensor(time_weights_list, device=self.device)
+        # 6. 计算全局 MAE (Masked)
+        # MAE: 使用 Bool Mask 计算有效区域
+        if mask_bool is not None:
+             val_mae = (torch.abs(y_pred_clamped - y) * mask_bool).sum() / (mask_bool.sum() + 1e-8)
         else:
-            time_weights = torch.ones(T_out, device=self.device) / T_out
-
-        total_score = 0.0
-        total_level_weight = sum(level_weights)
-
-        for t_val, w_level in zip(thresholds, level_weights):
-            if pred_mm.dim() == 5 and pred_mm.shape[2] == 1:
-                 p_mm = pred_mm.squeeze(2)
-                 t_mm = target_mm.squeeze(2)
-            else:
-                 p_mm = pred_mm
-                 t_mm = target_mm
-
-            hits_tensor = (p_mm >= t_val) & (t_mm >= t_val)
-            misses_tensor = (p_mm < t_val) & (t_mm >= t_val)
-            false_alarms_tensor = (p_mm >= t_val) & (t_mm < t_val)
-            
-            if p_mm.dim() == 4:
-                sum_dims = (0, 2, 3)
-            else: 
-                sum_dims = (0, 2, 3, 4)
-
-            hits = hits_tensor.float().sum(dim=sum_dims)
-            misses = misses_tensor.float().sum(dim=sum_dims)
-            false_alarms = false_alarms_tensor.float().sum(dim=sum_dims)
-            
-            ts_t = hits / (hits + misses + false_alarms + 1e-6)
-            ts_weighted_time = (ts_t * time_weights).sum()
-            total_score += ts_weighted_time * w_level
-
-        val_score = total_score / total_level_weight
-
-        self.log('val_score', val_score, on_epoch=True, prog_bar=True, sync_dist=True)
-        val_mae = F.l1_loss(y_pred_clamped, y)
+             val_mae = F.l1_loss(y_pred_clamped, y)
+             
         self.log('val_mae', val_mae, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
@@ -251,17 +226,21 @@ class MetMambaTrainer(l.LightningModule):
 
         x = self._interp(x, 'max_pool')
         y = self._interp(y, 'max_pool')
-        mask = mask.bool()
+
         mask = self._interp(mask.float(), 'nearest')
+        mask_bool = mask > 0.5
 
         logits_pred = self(x)
         y_pred = torch.sigmoid(logits_pred)
         y_pred_clamped = torch.clamp(y_pred, 0.0, 1.0)
         
         with torch.no_grad():
-            loss, loss_dict = self.criterion(logits_pred, y, mask=mask)
+            loss, loss_dict = self.criterion(logits_pred, y, mask=mask_bool)
+            # 同样可以在测试时记录 Score
+            scores = self.val_scorer(y_pred_clamped, y, mask=mask_bool)
             
         self.log('test_loss', loss, on_epoch=True)
+        self.log('test_score', scores['total_score'], on_epoch=True)
         
         return {
             'inputs': x[0].cpu().float().numpy(),

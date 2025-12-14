@@ -135,23 +135,56 @@ class MetMambaTrainer(l.LightningModule):
             scheduler.step(metric)
     
     def on_train_epoch_start(self):
-        """Curriculum Learning: Dynamic Loss Weights"""
+        """Curriculum Learning: Dynamic Loss Weights (With Warmup)"""
         if not self.use_curriculum: return
         
         max_epochs = self.hparams.get('max_epochs', 100)
-        progress = self.current_epoch / max_epochs
+        # [新增] 设定预热期，建议至少 5-10 个 Epoch
+        warmup_epochs = 10  
         
-        weights = {
-            'l1': max(10.0 - (9.0 * (progress ** 0.5)), 1.0),
-            'ssim': 1.0 - 0.5 * progress,
-            'csi': 0.5 + 4.5 * (progress ** 2),
-            'spec': 0.1 * progress,
-            'evo': 0.5 * progress
-        }
+        # === 阶段 1: 预热期 (Warmup Phase) ===
+        # 目标：仅使用强 L1 Loss 引导模型快速收敛到正确的数值范围
+        if self.current_epoch < warmup_epochs:
+            weights = {
+                'l1': 10.0,  # 强 L1 约束
+                'ssim': 0.0, # 暂时关闭
+                'csi': 0.0,  # 暂时关闭 (避免阈值梯度干扰)
+                'spec': 0.0, # 暂时关闭
+                'evo': 0.0   # 暂时关闭
+            }
+            
+        # === 阶段 2: 课程学习期 (Curriculum Phase) ===
+        # 目标：模型成型后，逐渐引入结构(SSIM)和指标(CSI)优化
+        else:
+            # 重新计算进度 (0.0 -> 1.0)，基于剩余的 Epoch
+            effective_epoch = self.current_epoch - warmup_epochs
+            effective_max = max_epochs - warmup_epochs
+            # 防止除以 0
+            progress = effective_epoch / effective_max if effective_max > 0 else 1.0
+            progress = max(0.0, min(1.0, progress)) # 截断到 [0, 1]
+            
+            weights = {
+                # L1: 从 10.0 快速下降到 1.0 (后期不再过分关注像素平滑)
+                'l1': max(10.0 - (9.0 * (progress ** 0.5)), 1.0),
+                
+                # SSIM: 从 0.0 线性增加到 0.5
+                'ssim': 0.5 * progress,
+                
+                # CSI: 从 0.0 指数增长到 5.0 (决胜指标，后期权重极大)
+                'csi': 5.0 * (progress ** 2),
+                
+                # Spec: 从 0.0 增加到 0.1
+                'spec': 0.1 * progress,
+                
+                # Evo: 从 0.0 增加到 0.5
+                'evo': 0.5 * progress
+            }
         
+        # 更新 Loss 模块的权重
         if hasattr(self.criterion, 'weights'):
             self.criterion.weights.update(weights)
         
+        # 记录日志
         for k, v in weights.items():
             self.log(f"train/w_{k}", v, on_epoch=True, sync_dist=True)
 

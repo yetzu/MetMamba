@@ -90,7 +90,7 @@ case $MODE in
         --model.warmup_epoch 5 \
         --model.decay_epoch 30 \
         --model.decay_rate 0.1 \
-        --model.use_curriculum_learning false \
+        --model.use_curriculum_learning True \
         \
         --model.loss_weight_l1 1.0 \
         --model.loss_weight_ssim 0.5 \

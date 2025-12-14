@@ -264,7 +264,7 @@ def create_precipitation_cmap():
     0 值 (及 < 0.01) 显示为白色
     """
     hex_colors = [
-        '#9CF48D',  # 0.01 <= r < 0.1 (浅绿)
+        # '#9CF48D',  # 0.01 <= r < 0.1 (浅绿)
         '#3CB73A',  # 0.1 <= r < 1 (中绿)
         '#63B7FF',  # 1 <= r < 2 (浅蓝)
         '#0200F9',  # 2 <= r < 5 (深蓝)
@@ -277,7 +277,8 @@ def create_precipitation_cmap():
     cmap.set_under('white')
     
     # 边界设置：起始值设为0.01，确保0值落入under区域（白色）
-    bounds = [0.01, 0.1, 1, 2, 5, 8, 100]
+    # bounds = [0.01, 0.1, 1, 2, 5, 8, 100]
+    bounds = [0.1, 1, 2, 5, 8, 100]
     norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=len(hex_colors))
     
     return cmap, norm
@@ -295,6 +296,11 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1
     obs_mm = obs_seq * MetricConfig.MM_MAX
     true_mm = true_seq * MetricConfig.MM_MAX
     pred_mm = pred_seq * MetricConfig.MM_MAX
+
+    thr = 0.1  # mm
+    obs_mm[obs_mm < thr] = 0
+    true_mm[true_mm < thr] = 0
+    pred_mm[pred_mm < thr] = 0
     
     # 增加高度以容纳底部 Legend
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 1.5, rows * 1.5 + 1.0))

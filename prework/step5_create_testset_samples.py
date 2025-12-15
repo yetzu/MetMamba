@@ -62,8 +62,12 @@ def main():
     test_set_name = "TestSetB"
     root_path = os.path.join(config.root_path, "CP", test_set_name)
     
+    print(f"[INFO] Scanning directory: {root_path} ...")
+    
     # 假设 scan_directory 返回 case_id 列表
     case_ids = scan_directory(root_path, 2, return_full_path=False)
+    
+    print(case_ids)
     
     # 清理旧文件
     output_file = "data/samples.testset.jsonl"

@@ -40,11 +40,11 @@ case $MODE in
         --trainer.default_root_dir "./output/mamba" \
         --trainer.accelerator cuda \
         --trainer.devices 0,1,2,3 \
-        --trainer.strategy ddp \
+        --trainer.strategy deepspeed_stage_2 \
         --trainer.precision 16-mixed \
         --trainer.max_epochs 100 \
-        --trainer.log_every_n_steps 50 \
-        --trainer.accumulate_grad_batches 2 \
+        --trainer.log_every_n_steps 100 \
+        --trainer.accumulate_grad_batches 1 \
         --trainer.gradient_clip_val 0.5 \
         --trainer.gradient_clip_algorithm "norm" \
         \
@@ -53,7 +53,7 @@ case $MODE in
         --trainer.callbacks.mode "max" \
         --trainer.callbacks.save_top_k "-1" \
         --trainer.callbacks.save_last true \
-        --trainer.callbacks.filename "epoch={epoch:02d}-score={val_score:.4f}" \
+        --trainer.callbacks.filename "{epoch:02d}{val_score:.4f}" \
         \
         --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping \
         --trainer.callbacks.monitor "val_score" \
@@ -61,13 +61,13 @@ case $MODE in
         --trainer.callbacks.patience 20 \
         \
         --data.data_path "data/samples.jsonl" \
-        --data.batch_size 2 \
+        --data.batch_size 4 \
         --data.num_workers 8 \
         \
         --model.in_shape "[10, 54, 256, 256]" \
         --model.out_seq_length 20 \
-        --model.hid_S 64 \
-        --model.hid_T 256 \
+        --model.hid_S 128 \
+        --model.hid_T 512 \
         --model.N_S 4 \
         --model.N_T 12 \
         --model.mlp_ratio 4.0 \
@@ -80,23 +80,24 @@ case $MODE in
         --model.d_conv 4 \
         --model.expand 2 \
         \
-        --model.lr 2e-4 \
+        --model.lr 5e-5 \
         --model.opt "adamw" \
         --model.weight_decay 0.05 \
         --model.filter_bias_and_bn true \
         --model.sched "cosine" \
         --model.min_lr 1e-6 \
         --model.warmup_lr 1e-6 \
-        --model.warmup_epoch 5 \
+        --model.warmup_epoch 10 \
         --model.decay_epoch 30 \
         --model.decay_rate 0.1 \
-        --model.use_curriculum_learning True \
+        --model.use_curriculum_learning true \
         \
         --model.loss_weight_l1 1.0 \
         --model.loss_weight_ssim 0.5 \
         --model.loss_weight_csi 1.0 \
         --model.loss_weight_spectral 0.5 \
         --model.loss_weight_evo 0.5 \
+        --ckpt_path ./output/mamba/lightning_logs/version_0/checkpoints/last.ckpt \
         ;;
         
     # ============================================================

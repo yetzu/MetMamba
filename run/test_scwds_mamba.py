@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import argparse
 import numpy as np
-from datetime import datetime
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,7 +15,6 @@ matplotlib.use('Agg')
 
 from metai.dataset.met_dataloader_scwds import ScwdsDataModule
 from metai.model.mamba.trainer import MetMambaTrainer
-from metai.model.mamba.config import ModelConfig
 from metai.model.mamba.metrices import MetScore
 
 # ==========================================
@@ -201,7 +199,8 @@ def calc_seq_metrics(true_seq: np.ndarray, pred_seq: np.ndarray, verbose: bool =
     """
     # 1. 初始化评分模块
     # MetScore 内部包含固定的评分权重和阈值
-    scorer = MetScore(data_max=30.0)
+    MM_MAX = 30.0
+    scorer = MetScore(data_max=MM_MAX)
     
     # 2. 数据转换 (Numpy -> Tensor)
     # MetScore 需要 [B, T, H, W] 格式
@@ -226,8 +225,11 @@ def calc_seq_metrics(true_seq: np.ndarray, pred_seq: np.ndarray, verbose: bool =
 
     # 5. 生成用于可视化的 Clean 数据
     # 模拟原始逻辑：将微小噪声置零 (MetScore 内部计算时不依赖此步骤，但在可视化时更清晰)
+
     pred_clean = pred_seq.copy()
-    pred_clean[pred_clean < (0.05 / 30.0)] = 0.0
+    THRESHOLD_NOISE = 0.05
+    denoise_mask = pred_clean < (THRESHOLD_NOISE / MM_MAX)
+    pred_clean[denoise_mask] = 0.0
 
     # 6. 打印详细日志
     if verbose:

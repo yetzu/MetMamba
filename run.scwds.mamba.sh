@@ -129,9 +129,8 @@ case $MODE in
             --data_path data/samples.testset.jsonl \
             --in_shape 20 54 256 256 \
             --save_dir ./output/mamba \
-            --accelerator cuda
+            --accelerator cuda \
+            --vis
         ;;
        
 esac
-
-echo "✅ 操作完成！"

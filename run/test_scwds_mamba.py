@@ -15,33 +15,50 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 matplotlib.use('Agg')
 
 from metai.dataset.met_dataloader_scwds import ScwdsDataModule
-# [修改] 导入 Mamba 相关的 Trainer 和 Config
 from metai.model.mamba.trainer import MetMambaTrainer
 from metai.model.mamba.config import ModelConfig
+from metai.model.mamba.metrices import MetScore
 
 # ==========================================
 # Part 0: 辅助工具函数
 # ==========================================
 
 class TeeLogger:
-    """同时输出到控制台和文件的日志类"""
-    def __init__(self, log_file_path):
+    """双向日志记录器，同时将输出重定向到控制台和文件。
+
+    用于在长时间运行的任务中保留完整的终端输出记录。
+
+    Attributes:
+        log_file (file object): 日志文件句柄。
+        console (file object): 标准输出句柄 (sys.stdout)。
+    """
+
+    def __init__(self, log_file_path: str):
+        """初始化日志记录器。
+
+        Args:
+            log_file_path: 日志文件的保存路径。
+        """
         self.log_file = open(log_file_path, 'w', encoding='utf-8')
         self.console = sys.stdout
         
-    def write(self, message):
-        """写入消息到控制台和文件"""
+    def write(self, message: str):
+        """写入消息。
+
+        Args:
+            message: 需要写入的字符串内容。
+        """
         self.console.write(message)
         self.log_file.write(message)
         self.log_file.flush()
         
     def flush(self):
-        """刷新缓冲区"""
+        """刷新缓冲区，确保内容即时写入。"""
         self.console.flush()
         self.log_file.flush()
         
     def close(self):
-        """关闭文件"""
+        """关闭日志文件句柄。"""
         if self.log_file:
             self.log_file.close()
             
@@ -51,17 +68,21 @@ class TeeLogger:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-# 全局日志对象，初始为 None
+# 全局日志对象占位符
 _logger = None
 
-def set_logger(log_file_path):
-    """设置全局日志对象"""
+def set_logger(log_file_path: str):
+    """设置全局日志重定向。
+
+    Args:
+        log_file_path: 日志文件路径。
+    """
     global _logger
     _logger = TeeLogger(log_file_path)
     sys.stdout = _logger
     
 def restore_stdout():
-    """恢复标准输出"""
+    """恢复标准输出（sys.stdout）到默认控制台。"""
     global _logger
     if _logger:
         sys.stdout = _logger.console
@@ -69,6 +90,21 @@ def restore_stdout():
         _logger = None
 
 def find_best_ckpt(save_dir: str) -> str:
+    """在指定目录中递归查找最佳或最新的检查点文件 (.ckpt)。
+
+    查找策略：
+    1. 优先查找 explicitly named 'best.ckpt' 或 'last.ckpt'.
+    2. 如果未找到，递归搜索所有 .ckpt 文件，并按字典序排序返回最后一个（通常对应最大的 epoch）。
+
+    Args:
+        save_dir: 检查点保存的根目录。
+
+    Returns:
+        str: 找到的检查点文件的绝对路径。
+
+    Raises:
+        FileNotFoundError: 如果在目录下未找到任何 .ckpt 文件。
+    """
     # 0. 如果传入的是具体文件路径，直接返回
     if os.path.isfile(save_dir):
         return save_dir
@@ -80,8 +116,7 @@ def find_best_ckpt(save_dir: str) -> str:
     last = os.path.join(save_dir, 'last.ckpt')
     if os.path.exists(last): return last
     
-    # 2. [修改] 递归查找所有 .ckpt 文件 (支持 lightning_logs/version_x/checkpoints 结构)
-    # 使用 recursive=True 遍历子目录
+    # 2. 递归查找所有 .ckpt 文件
     print(f"[INFO] Searching for checkpoints in {save_dir} recursively...")
     search_pattern = os.path.join(save_dir, '**', '*.ckpt')
     all_cpts = glob.glob(search_pattern, recursive=True)
@@ -89,18 +124,23 @@ def find_best_ckpt(save_dir: str) -> str:
     if not all_cpts:
         raise FileNotFoundError(f'No checkpoint found in {save_dir}')
 
-    # 3. 排除掉可能存在的临时文件或非目标文件，并排序
-    # 优先排除 explicitly named last/best if we want to find specific epochs, 
-    # but usually getting the latest file by name (epoch number) is safe.
-    # 简单的按文件名排序通常能获得最大的 epoch (例如 epoch=09.ckpt > epoch=01.ckpt)
+    # 3. 排序并返回最后一个 (通常是 epoch 最大的)
     all_cpts = sorted(all_cpts)
     
     found_ckpt = all_cpts[-1]
     print(f"[INFO] Found checkpoint: {found_ckpt}")
     return found_ckpt
 
-def get_checkpoint_info(ckpt_path: str):
-    """从 checkpoint 文件中提取训练关键信息（不打印）"""
+def get_checkpoint_info(ckpt_path: str) -> dict:
+    """读取 Checkpoint 文件头信息，不加载模型权重。
+
+    Args:
+        ckpt_path: .ckpt 文件路径。
+
+    Returns:
+        dict: 包含 'epoch', 'global_step', 'hparams' 等元数据的字典。
+              如果读取失败，返回包含 'error' 键的字典。
+    """
     try:
         ckpt = torch.load(ckpt_path, map_location='cpu')
         epoch = ckpt.get('epoch', None)
@@ -116,7 +156,11 @@ def get_checkpoint_info(ckpt_path: str):
         return {'error': str(e)}
 
 def print_checkpoint_info(ckpt_info: dict):
-    """打印 checkpoint 信息"""
+    """格式化打印 Checkpoint 元数据。
+
+    Args:
+        ckpt_info: 由 `get_checkpoint_info` 返回的字典。
+    """
     if 'error' in ckpt_info:
         print(f"[WARNING] 无法读取 checkpoint 信息: {ckpt_info['error']}")
         return
@@ -134,115 +178,95 @@ def print_checkpoint_info(ckpt_info: dict):
     print("=" * 80)
 
 # ==========================================
-# Part 1: 全局评分配置 (Metric Configuration)
-# ==========================================
-class MetricConfig:
-    MM_MAX = 30.0
-    THRESHOLD_NOISE = 0.05 
-    LEVEL_EDGES = np.array([0.1, 1.0, 2.0, 5.0, 8.0, np.inf], dtype=np.float32)
-    _raw_level_weights = np.array([0.1, 0.1, 0.2, 0.25,  0.35], dtype=np.float32)
-    LEVEL_WEIGHTS = _raw_level_weights / _raw_level_weights.sum()
-
-    TIME_WEIGHTS_DICT = {
-        0: 0.0075, 1: 0.02, 2: 0.03, 3: 0.04, 4: 0.05,
-        5: 0.06, 6: 0.07, 7: 0.08, 8: 0.09, 9: 0.1,
-        10: 0.09, 11: 0.08, 12: 0.07, 13: 0.06, 14: 0.05,
-        15: 0.04, 16: 0.03, 17: 0.02, 18: 0.0075, 19: 0.005
-    }
-
-    @staticmethod
-    def get_time_weights(T):
-        if T == 20:
-            return np.array([MetricConfig.TIME_WEIGHTS_DICT[t] for t in range(T)], dtype=np.float32)
-        else:
-            print(f"[WARN] T={T}, expected 20. Using uniform time weights.")
-            return np.ones(T, dtype=np.float32) / T
-
-# ==========================================
 # Part 2: 核心统计计算 (Core Metrics)
 # ==========================================
-def calc_seq_metrics(true_seq, pred_seq, verbose=True):
-    T, H, W = true_seq.shape
-    
-    pred_clean = pred_seq.copy()
-    pred_clean[pred_clean < (MetricConfig.THRESHOLD_NOISE / MetricConfig.MM_MAX)] = 0.0
-    
-    time_weights = MetricConfig.get_time_weights(T)
-    score_k_list = []
-    
-    tru_mm_seq = np.clip(true_seq, 0.0, None) * MetricConfig.MM_MAX
-    prd_mm_seq = np.clip(pred_clean, 0.0, None) * MetricConfig.MM_MAX
-    
-    ts_mean_levels = np.zeros(len(MetricConfig.LEVEL_WEIGHTS))
-    mae_mm_mean_levels = np.zeros(len(MetricConfig.LEVEL_WEIGHTS))
-    corr_sum = 0.0
+def calc_seq_metrics(true_seq: np.ndarray, pred_seq: np.ndarray, verbose: bool = True) -> dict:
+    """计算序列预测的综合气象评分（调用 MetScore）。
 
+    该函数将 Numpy 数据转换为 Tensor，使用官方评分模块 `MetScore` 计算
+    包括相关系数 (Corr)、Threat Score (TS) 和 平均绝对误差 (MAE) 在内的综合得分。
+
+    Args:
+        true_seq (np.ndarray): 真实观测序列 (归一化值 0~1)。
+            Shape: [T, H, W], 其中 T=20 (通常), H=256, W=256。
+        pred_seq (np.ndarray): 模型预测序列 (归一化值 0~1)。
+            Shape: [T, H, W]。
+        verbose (bool): 是否打印逐帧详细评分日志。默认 True。
+
+    Returns:
+        dict: 包含以下键的字典:
+            - "final_score" (float): 时间加权的序列总评分。
+            - "score_per_frame" (np.ndarray): 每一帧的综合评分, Shape [T]。
+            - "pred_clean" (np.ndarray): 去噪后的预测序列 (用于可视化), Shape [T, H, W]。
+    """
+    # 1. 初始化评分模块
+    # MetScore 内部包含固定的评分权重和阈值
+    scorer = MetScore(data_max=30.0)
+    
+    # 2. 数据转换 (Numpy -> Tensor)
+    # MetScore 需要 [B, T, H, W] 格式
+    # Shape: [T, H, W] -> [1, T, H, W]
+    t_tensor = torch.from_numpy(true_seq).unsqueeze(0).float()
+    p_tensor = torch.from_numpy(pred_seq).unsqueeze(0).float()
+    
+    # 3. 计算指标 (核心逻辑委托给 MetScore)
+    # output keys: 'total_score', 'score_time', 'r_time', 'ts_time', 'mae_time'
+    metrics = scorer(p_tensor, t_tensor)
+    
+    # 4. 提取结果并转回 Numpy
+    final_score = metrics['total_score'].item()
+    score_k_arr = metrics['score_time'].detach().numpy() # [T]
+    r_k_arr = metrics['r_time'].detach().numpy()         # [T]
+    
+    # 获取时间权重用于日志显示 (从 buffer 中获取)
+    # Shape: [T]
+    time_weights = scorer.time_weights_default.detach().numpy()
+    if len(time_weights) > len(score_k_arr):
+        time_weights = time_weights[:len(score_k_arr)]
+
+    # 5. 生成用于可视化的 Clean 数据
+    # 模拟原始逻辑：将微小噪声置零 (MetScore 内部计算时不依赖此步骤，但在可视化时更清晰)
+    pred_clean = pred_seq.copy()
+    pred_clean[pred_clean < (0.05 / 30.0)] = 0.0
+
+    # 6. 打印详细日志
     if verbose:
+        # 反归一化用于统计信息打印
+        tru_mm_seq = true_seq * 30.0
+        prd_mm_seq = pred_clean * 30.0
+        
         print(f"True Stats (mm): Max={np.max(tru_mm_seq):.2f}, Mean={np.mean(tru_mm_seq):.2f}")
         print(f"Pred Stats (mm): Max={np.max(prd_mm_seq):.2f}, Mean={np.mean(prd_mm_seq):.2f}")
         print("-" * 90)
-        print(f"{'T':<3} | {'Corr(R)':<9} | {'TS_w_sum':<9} | {'Score_k':<9} | {'W_time':<8}")
+        # 这里的 Weighted_Metric 是除去相关系数调节项后的分数部分，用于调试
+        # Score = Term_Corr * Weighted_Metric => Weighted_Metric = Score / Term_Corr
+        # Term_Corr = sqrt(exp(R - 1))
+        print(f"{'T':<3} | {'Corr(R)':<9} | {'Score_base':<9} | {'Score_k':<9} | {'W_time':<8}")
         print("-" * 90)
 
-    for t in range(T):
-        tru_frame = tru_mm_seq[t].reshape(-1)
-        prd_frame = prd_mm_seq[t].reshape(-1)
-        abs_err = np.abs(prd_frame - tru_frame)
-
-        mask_valid_corr = (tru_frame > 0) | (prd_frame > 0)
-        if mask_valid_corr.sum() > 1:
-            t_valid = tru_frame[mask_valid_corr]
-            p_valid = prd_frame[mask_valid_corr]
-            numerator = np.sum((t_valid - t_valid.mean()) * (p_valid - p_valid.mean()))
-            denom = np.sqrt(np.sum((t_valid - t_valid.mean())**2) * np.sum((p_valid - p_valid.mean())**2))
-            R_k = numerator / (denom + 1e-8)
-        else:
-            R_k = 0.0
-        
-        R_k = float(np.clip(R_k, -1.0, 1.0))
-        corr_sum += R_k
-        term_corr = np.sqrt(np.exp(R_k - 1.0))
-
-        weighted_sum_metrics = 0.0
-        for i in range(len(MetricConfig.LEVEL_WEIGHTS)):
-            low = MetricConfig.LEVEL_EDGES[i]
-            high = MetricConfig.LEVEL_EDGES[i+1]
-            w_i = MetricConfig.LEVEL_WEIGHTS[i]
-
-            tru_bin = (tru_frame >= low) & (tru_frame < high)
-            prd_bin = (prd_frame >= low) & (prd_frame < high)
+        for t in range(len(score_k_arr)):
+            R_k = r_k_arr[t]
+            Score_k = score_k_arr[t]
             
-            tp = np.logical_and(tru_bin, prd_bin).sum()
-            fn = np.logical_and(tru_bin, ~prd_bin).sum()
-            fp = np.logical_and(~tru_bin, prd_bin).sum()
-            denom_ts = tp + fn + fp
-            ts_val = (tp / denom_ts) if denom_ts > 0 else 1e-6
+            # 逆向计算 Base Score 用于展示 (Score_k / Corr_Term)
+            term_corr = np.sqrt(np.exp(R_k - 1.0))
+            base_score = Score_k / (term_corr + 1e-8)
             
-            mask_eval = tru_bin | prd_bin
-            mae_val = np.mean(abs_err[mask_eval]) if mask_eval.sum() > 0 else 0.0
-            
-            ts_mean_levels[i] += ts_val / T
-            mae_mm_mean_levels[i] += mae_val / T
-            
-            term_mae = np.sqrt(np.exp(-mae_val / 100.0))
-            weighted_sum_metrics += w_i * ts_val * term_mae
+            w_t = time_weights[t] if t < len(time_weights) else 0.0
+            print(f"{t:<3} | {R_k:<9.4f} | {base_score:<9.4f} | {Score_k:<9.4f} | {w_t:<8.4f}")
 
-        Score_k = term_corr * weighted_sum_metrics
-        score_k_list.append(Score_k)
-
-        if verbose:
-            print(f"{t:<3} | {R_k:<9.4f} | {weighted_sum_metrics:<9.4f} | {Score_k:<9.4f} | {time_weights[t]:<8.4f}")
-
-    score_k_arr = np.array(score_k_list)
-    final_score = np.sum(score_k_arr * time_weights)
-    
+    # 打印统计摘要
     print("-" * 90)
-    ts_str = ", ".join([f"{v:.3f}" for v in ts_mean_levels])
-    mae_str = ", ".join([f"{v:.3f}" for v in mae_mm_mean_levels])
+    # MetScore 返回的是 Tensor [L]
+    ts_mean = metrics['ts_levels'].detach().numpy()
+    mae_mean = metrics['mae_levels'].detach().numpy()
+    
+    ts_str = ", ".join([f"{v:.3f}" for v in ts_mean])
+    mae_str = ", ".join([f"{v:.3f}" for v in mae_mean])
     
     print(f"[METRIC] TS_mean  (Levels): {ts_str}")
     print(f"[METRIC] MAE_mean (Levels): {mae_str}")
-    print(f"[METRIC] Corr_mean: {corr_sum / T:.4f}")
+    print(f"[METRIC] Corr_mean: {np.mean(r_k_arr):.4f}")
     print(f"[METRIC] Final_Weighted_Score: {final_score:.6f}")
     print(f"[METRIC] Score_per_t: {', '.join([f'{s:.3f}' for s in score_k_arr])}")
     print("-" * 90)
@@ -258,13 +282,23 @@ def calc_seq_metrics(true_seq, pred_seq, verbose=True):
 # ==========================================
 
 def create_precipitation_cmap():
-    """
-    创建自定义降水色标
-    区间: 0.01 <= r < 0.1, 0.1 <= r < 1, ..., r >= 8
-    0 值 (及 < 0.01) 显示为白色
+    """创建自定义降水色标 (Colormap)。
+    
+    定义符合气象标准的降水色阶：
+    区间定义: 
+      - < 0.1: 白色 (无降水/微量)
+      - 0.1 ~ 1.0: 浅绿
+      - 1.0 ~ 2.0: 中绿
+      - ...
+      - > 8.0: 深红 (强降水)
+
+    Returns:
+        tuple: (cmap, norm)
+            - cmap (matplotlib.colors.ListedColormap): 自定义颜色映射对象。
+            - norm (matplotlib.colors.BoundaryNorm): 对应的边界归一化对象。
     """
     hex_colors = [
-        # '#9CF48D',  # 0.01 <= r < 0.1 (浅绿)
+        # '#9CF48D',  # 0.01 <= r < 0.1 (浅绿 - 已注释)
         '#3CB73A',  # 0.1 <= r < 1 (中绿)
         '#63B7FF',  # 1 <= r < 2 (浅蓝)
         '#0200F9',  # 2 <= r < 5 (深蓝)
@@ -276,28 +310,48 @@ def create_precipitation_cmap():
     cmap.set_bad('white')
     cmap.set_under('white')
     
-    # 边界设置：起始值设为0.01，确保0值落入under区域（白色）
-    # bounds = [0.01, 0.1, 1, 2, 5, 8, 100]
+    # 边界设置：起始值设为0.1，<0.1 落入 under 区域显示白色
     bounds = [0.1, 1, 2, 5, 8, 100]
     norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=len(hex_colors))
     
     return cmap, norm
 
-def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1.0):
-    """
-    绘制 Obs, GT, Pred, Diff 对比图
-    修复：确保所有列都显示边框（移除 axis('off')，改为隐藏刻度）
+def plot_seq_visualization(obs_seq: np.ndarray, 
+                           true_seq: np.ndarray, 
+                           pred_seq: np.ndarray, 
+                           scores: np.ndarray, 
+                           out_path: str, 
+                           vmax: float = 1.0):
+    """生成并保存多帧对比的可视化图像。
+
+    图像包含 4 行：
+    1. Obs: 输入的历史雷达/降水观测。
+    2. GT: 未来的真实降水 (Target)。
+    3. Pred: 模型的预测降水。
+    4. Diff: 预测误差 (GT - Pred)。
+
+    Args:
+        obs_seq (np.ndarray): 输入序列, Shape [T_in, H, W] 或 [T_in, C, H, W]。
+        true_seq (np.ndarray): 真实序列, Shape [T_out, H, W]。
+        pred_seq (np.ndarray): 预测序列, Shape [T_out, H, W]。
+        scores (np.ndarray): 每一帧的评分数组 (未使用，可用于标题扩展), Shape [T_out]。
+        out_path (str): 图片保存路径。
+        vmax (float): 归一化最大值 (默认 1.0)。
     """
     T = true_seq.shape[0] # T_out = 20
     rows, cols = 4, T
     
     precip_cmap, precip_norm = create_precipitation_cmap()
     
-    obs_mm = obs_seq * MetricConfig.MM_MAX
-    true_mm = true_seq * MetricConfig.MM_MAX
-    pred_mm = pred_seq * MetricConfig.MM_MAX
+    # 反归一化到物理量 (mm)
+    # MM_MAX 硬编码为 30.0，与训练一致
+    MM_MAX = 30.0
+    obs_mm = obs_seq * MM_MAX
+    true_mm = true_seq * MM_MAX
+    pred_mm = pred_seq * MM_MAX
 
-    thr = 0.1  # mm
+    # 阈值过滤：小于 0.1mm 视为无降水 (可视化降噪)
+    thr = 0.1
     obs_mm[obs_mm < thr] = 0
     true_mm[true_mm < thr] = 0
     pred_mm[pred_mm < thr] = 0
@@ -310,8 +364,10 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1
 
     # 辅助函数：统一设置边框样式
     def setup_ax_border(ax, show_ylabel=False, ylabel_text=""):
-        # 关键修改：不要使用 ax.axis('off')，否则边框会被隐藏
-        # 而是隐藏刻度
+        """设置子图边框和标签。
+        
+        隐藏刻度但保留边框线，以便清晰显示图像边界。
+        """
         ax.set_xticks([])
         ax.set_yticks([])
         
@@ -333,6 +389,7 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1
             ax.imshow(obs_mm[t], cmap=precip_cmap, norm=precip_norm)
             ax.set_title(f'In-{t}', fontsize=6)
         else:
+            # 如果 Obs 长度小于 Out 长度，补黑/白
             ax.imshow(np.zeros_like(true_mm[0]), cmap=precip_cmap, norm=precip_norm)
         
         setup_ax_border(ax, show_ylabel=(t==0), ylabel_text='Obs')
@@ -351,6 +408,7 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1
         # 4. Diff (GT - Pred)
         ax = axes[3, t]
         diff = true_mm[t] - pred_mm[t]
+        # 差值图使用红蓝配色 (bwr)，范围固定为 [-30, 30] mm
         ax.imshow(diff, cmap='bwr', vmin=-30, vmax=30)
         setup_ax_border(ax, show_ylabel=(t==0), ylabel_text='Diff')
 
@@ -381,8 +439,25 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1
 # ==========================================
 # Part 4: 主入口函数 (Wrapper)
 # ==========================================
-def render(obs_seq, true_seq, pred_seq, out_path: str, vmax: float = 1.0):
-    # 1. 数据格式统一 (转 Numpy & 提取通道)
+def render(obs_seq: torch.Tensor, 
+           true_seq: torch.Tensor, 
+           pred_seq: torch.Tensor, 
+           out_path: str, 
+           vmax: float = 1.0) -> float:
+    """渲染单个样本的预测结果，计算指标并绘图。
+
+    Args:
+        obs_seq (torch.Tensor): 观测张量 (输入).
+            Shape: [C, H, W] 或 [T, C, H, W] (C=0 为雷达/降水).
+        true_seq (torch.Tensor): 真实值张量. Shape: [T, 1, H, W] 或 [T, H, W].
+        pred_seq (torch.Tensor): 预测值张量. Shape: [T, 1, H, W] 或 [T, H, W].
+        out_path (str): 图片输出路径.
+        vmax (float): 归一化最大值.
+
+    Returns:
+        float: 该样本的最终加权综合评分 (Final Score).
+    """
+    # 1. 数据格式统一 (转 Numpy & 提取主要通道)
     def to_numpy_ch(x, ch=0):
         if isinstance(x, torch.Tensor): x = x.detach().cpu().numpy()
         # 输入维度 (T, C, H, W), 通道 0 是雷达/降水标签
@@ -395,7 +470,7 @@ def render(obs_seq, true_seq, pred_seq, out_path: str, vmax: float = 1.0):
     
     print(f"Processing: {os.path.basename(out_path)}")
     
-    # 2. 调用统计模块
+    # 2. 调用统计模块 (已重构为使用 MetScore)
     metrics_res = calc_seq_metrics(tru, prd, verbose=True)
     
     final_score = metrics_res['final_score']
@@ -448,7 +523,7 @@ def main():
     print_checkpoint_info(ckpt_info)
     print(f"[INFO] Input Shape: {args.in_shape}")
     print(f"[INFO] Output Length: {args.out_seq_length}")
-    print(f"[INFO] Metric MM_MAX: {MetricConfig.MM_MAX}")
+    print(f"[INFO] Metric MM_MAX: 30.0") 
     print(f"[INFO] 可视化结果将保存到: {out_dir}")
     
     # 加载 MetMamba 模型
@@ -470,7 +545,7 @@ def main():
         for bidx, batch in enumerate(test_loader):
             metadata_batch, batch_x, batch_y, input_mask, target_mask = batch
             
-            # [修改] 调用 test_step (传入 tuple)
+            # 调用 test_step (传入 tuple)
             outputs = model.test_step(
                 (None, batch_x.to(device), batch_y.to(device), None, target_mask.to(device), ), 
                 bidx
